@@ -6,11 +6,46 @@
 #define INCREMENT 1442695040888963407ull
 
 // set this to something like os_get_current_cycle_count() for very randomized seed
-u64 seed_for_random = 1;
+u64 seed_for_random = 2;
 
 u64 get_random() {
     seed_for_random = seed_for_random * MULTIPLIER + INCREMENT;
     return seed_for_random;
+}
+
+u64 get_random_from_seed(u64 seed) {
+	seed = seed * MULTIPLIER + INCREMENT;
+    return seed;
+}
+
+int uniform_distribution(int rangeLow, int rangeHigh) {
+    double myRand = rand()/(1.0 + RAND_MAX); 
+    int range = rangeHigh - rangeLow + 1;
+    int myRand_scaled = (myRand * range) + rangeLow;
+    return myRand_scaled;
+}
+
+int randint(int n) {
+  if ((n - 1) == RAND_MAX) {
+    return rand();
+  } else {
+    // Supporting larger values for n would requires an even more
+    // elaborate implementation that combines multiple calls to rand()
+    assert (n <= RAND_MAX)
+
+    // Chop off all of the values that would cause skew...
+    int end = RAND_MAX / n; // truncate skew
+    assert (end > 0);
+    end *= n;
+
+    // ... and ignore results from rand() that fall above that limit.
+    // (Worst case the loop condition should succeed 50% of the time,
+    // so we can expect to bail out of this loop pretty quickly.)
+    int r;
+    while ((r = rand()) >= end);
+
+    return r % n;
+  }
 }
 
 f32 get_random_float32() {
