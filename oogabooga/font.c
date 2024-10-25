@@ -1,13 +1,22 @@
 
-// See oogabooga/examples/text_rendering.c for usage
-
-
+// See oogabooga/examples/text_rendering.c for a practical example
 
 /*
-TODO:
-	- Justify rows in walk_glyphs
-*/
 
+	Example Usage:
+	
+	Gfx_Font *font = load_font_from_disk(STR("C:/windows/fonts/arial.ttf"), get_heap_allocator());
+	assert(font, "Failed loading arial.ttf");
+
+	while (...) {
+		...
+		
+		draw_text(font, STR("Some text"), raster_height, v2(x, y),  v2(scale_x, scale_y), v4(r, g, b, a));
+		
+		...
+	}
+
+*/
 
 // #Memory #Speed
 // This is terruble  and huge waste of video memory. We should have a constant codepoint range
@@ -19,14 +28,43 @@ TODO:
 typedef struct Gfx_Font Gfx_Font;
 typedef struct Gfx_Text_Metrics {
 	
-	// "functional" is what you would use for example for text editing for constistent
-	// placements.
-	// To draw text with it's origin at the bottom left, you need to sub this from the bottom
-	// left. I.e:
-	// Vector2 justified_pos = v2_sub(bottom_left, metrics.functional_pos_min);
-	// If you want to center, you have to first justify to bottom left and then add half of
-	// metrics.functional_size (or visual_size if you want perfect alignment and the text 
-	// is static).
+	
+	/*
+	
+		FUNCTIONAL BOX:
+			x0: left start of text box
+			x1: right end of text box
+			y0: The baseline for the bottom line of text
+			y1: The baseline for the top line of text + latin_ascent
+			
+		VISUAL BOX:
+			x0: The minimum X of any pixels
+			x1: The maximum X of any pixels
+			y0: The minimum Y of any pixels
+			y1: The maximum Y of any pixels
+			
+			
+		Usage:
+		
+			For a single piece of static text, it might look better to use the visual box for aligning it somewhere.
+			I might be stupid and that might be useless tho.
+			
+			Most of the time, you are probably going to want to use the functional box.
+			
+			For example, to center:
+			
+				Gfx_Text_Metrics m = measure_text(...);
+				
+				// This is the point where the center of the text box will be
+				Vector2 draw_pos = v2(...);
+				
+				// First justify for the bottom-left to be at the draw point
+				Vector2 justified = v2_sub(draw_pos, m.functional_pos_min);
+				
+				// Then move text backwards by functional_size/2 to align its center to the draw point
+				justified = v2_sub(justified, v2_divf(m.functional_size, 2));
+	
+	*/
 	Vector2 functional_pos_min;
 	Vector2 functional_pos_max;
 	Vector2 functional_size;
@@ -45,6 +83,8 @@ typedef struct Gfx_Font_Metrics {
 	float max_descent;
 	
 	float line_spacing;
+	
+	float new_line_offset;
 	
 } Gfx_Font_Metrics;
 typedef struct Gfx_Glyph {
@@ -157,15 +197,18 @@ void font_variation_init(Gfx_Font_Variation *variation, Gfx_Font *font, u32 font
 			variation->metrics.latin_descent = c_descent;
 		}
 	}
+	
 	for (u32 c = 'A'; c <= 'Z'; c++) {
 		// This one is bottom-top as opposed to normally in stbtt where it's top-bottom
 		int x0, y0, x1, y1;
 		stbtt_GetCodepointBitmapBox(&font->stbtt_handle, (int)c, variation->scale, variation->scale, &x0, &y0, &x1, &y1);
-		float c_ascent = (float)(y1-y0); // #Bugprone #Cleanup I am not at all sure about this!
-		
+		float c_ascent = (float)abs(y0);
 		if (c_ascent > variation->metrics.latin_ascent) 
 			variation->metrics.latin_ascent = c_ascent;
 	}
+	
+	variation->metrics.new_line_offset 
+		= (variation->metrics.latin_ascent-variation->metrics.latin_descent+variation->metrics.line_spacing);
 	
 	variation->initted = true;
 }
@@ -215,8 +258,8 @@ void font_atlas_init(Gfx_Font_Atlas *atlas, Gfx_Font_Variation *variation, u32 f
 		glyph->advance = (float)advance*variation->scale;
 		//glyph->xoffset += (float)left_side_bearing*variation->scale;
 		
-		glyph->uv.x1 = (float)cursor_x/(float)FONT_ATLAS_WIDTH;
-		glyph->uv.y1 = (float)cursor_y/(float)FONT_ATLAS_HEIGHT;
+		glyph->uv.x1 = ((float)cursor_x)/(float)FONT_ATLAS_WIDTH;
+		glyph->uv.y1 = ((float)cursor_y)/(float)FONT_ATLAS_HEIGHT;
 		glyph->uv.x2 = ((float)cursor_x+glyph->width)/(float)FONT_ATLAS_WIDTH;
 		glyph->uv.y2 = ((float)cursor_y+glyph->height)/(float)FONT_ATLAS_HEIGHT;
 		
@@ -255,6 +298,8 @@ typedef struct {
 } Walk_Glyphs_Spec;
 void walk_glyphs(Walk_Glyphs_Spec spec, Walk_Glyphs_Callback_Proc proc) {
 	
+	if (spec.text.data == 0 || spec.text.count <= 0) return;
+	
 	Gfx_Font_Variation *variation = &spec.font->variations[spec.raster_height];
 	
 	float x = 0;
@@ -268,7 +313,7 @@ void walk_glyphs(Walk_Glyphs_Spec spec, Walk_Glyphs_Callback_Proc proc) {
 		
 		if (c == '\n') {
 			x = 0;
-			y -= (variation->metrics.latin_ascent-variation->metrics.latin_descent+variation->metrics.line_spacing)*spec.scale.y;
+			y -= variation->metrics.new_line_offset*spec.scale.y;
 			last_c = 0;
 		}
 		
@@ -314,18 +359,20 @@ Gfx_Font_Metrics get_font_metrics(Gfx_Font *font, u32 raster_height) {
 Gfx_Font_Metrics get_font_metrics_scaled(Gfx_Font *font, u32 raster_height, Vector2 scale) {
 	Gfx_Font_Metrics metrics = get_font_metrics(font, raster_height);
 	
-	metrics.latin_ascent *= scale.x;
-	metrics.latin_descent *= scale.x;
-	metrics.max_ascent *= scale.x;
-	metrics.max_descent *= scale.x;
-	metrics.line_spacing *= scale.x;
+	metrics.latin_ascent *= scale.y;
+	metrics.latin_descent *= scale.y;
+	metrics.max_ascent *= scale.y;
+	metrics.max_descent *= scale.y;
+	metrics.line_spacing *= scale.y;
+	metrics.new_line_offset *= scale.y;
 	
 	return metrics;
 }
 
 typedef struct {
 	Gfx_Text_Metrics m;
-	
+	Gfx_Font *font;
+	u32 raster_height;
 	Vector2 scale;
 } Measure_Text_Walk_Glyphs_Context;
 
@@ -333,10 +380,12 @@ bool measure_text_glyph_callback(Gfx_Glyph glyph, Gfx_Font_Atlas *atlas, float g
 
 	Measure_Text_Walk_Glyphs_Context *c = (Measure_Text_Walk_Glyphs_Context*)ud;
 	
+	Gfx_Font_Metrics m = get_font_metrics_scaled(c->font, c->raster_height, c->scale);
+	
 	float functional_left = glyph_x-glyph.xoffset*c->scale.x;
-	float functional_bottom = glyph_y-glyph.yoffset*c->scale.y;
-	float functional_right = functional_left + glyph.width*c->scale.x;
-	float functional_top = functional_bottom + glyph.height*c->scale.y;
+	float functional_bottom = glyph_y-glyph.yoffset*c->scale.y; // baseline
+	float functional_right = functional_left + (glyph.width+glyph.xoffset)*c->scale.x;
+	float functional_top = functional_bottom + (m.latin_ascent+glyph.yoffset)*c->scale.y;
 	
 	c->m.functional_pos_min.x = min(c->m.functional_pos_min.x, functional_left);
 	c->m.functional_pos_min.y = min(c->m.functional_pos_min.y, functional_bottom);
@@ -356,9 +405,12 @@ bool measure_text_glyph_callback(Gfx_Glyph glyph, Gfx_Font_Atlas *atlas, float g
 	return true;
 }
 Gfx_Text_Metrics measure_text(Gfx_Font *font, string text, u32 raster_height, Vector2 scale) {
+
 	Measure_Text_Walk_Glyphs_Context c = ZERO(Measure_Text_Walk_Glyphs_Context);
 	
 	c.scale = scale;
+	c.font = font;
+	c.raster_height = raster_height;
 	
 	walk_glyphs((Walk_Glyphs_Spec){font, text, raster_height, scale, true, &c}, measure_text_glyph_callback);
 	
@@ -368,3 +420,105 @@ Gfx_Text_Metrics measure_text(Gfx_Font *font, string text, u32 raster_height, Ve
 	return c.m;
 }
 
+typedef struct State_For_Glyph_Line_Break_Search {
+	u64 *line_break_indices;
+	u64 *glyph_count_per_line;
+	float32 width;
+	u64 line_num;
+	u64 start_index;
+	u64 index;
+	u64 last_space_index;
+	float32 line_start_x;
+	float32 last_space_x; // -elon
+	u64 count;
+	Vector2 scale;
+} State_For_Glyph_Line_Break_Search;
+bool text_line_wrapping_callback(Gfx_Glyph g, Gfx_Font_Atlas *atlas, float x, float y, void *ud) {
+	State_For_Glyph_Line_Break_Search *state = (State_For_Glyph_Line_Break_Search*)ud;
+
+	bool is_newline = g.codepoint == '\n';
+	if (g.codepoint < 32 && !is_newline) {
+		state->index += 1;
+		state->count += 1;
+		return true;
+	}
+
+
+	float32 glyph_right = x + g.width*state->scale.x;
+	
+	if (state->last_space_index == state->index) state->last_space_x = x;
+
+	if ((g.codepoint != 32 && (glyph_right-state->line_start_x) > state->width) || is_newline) {
+
+		bool do_break_at_last_space = state->last_space_index > state->start_index && !is_newline;
+
+		u64 break_index;
+		if (do_break_at_last_space) break_index = state->last_space_index;
+		else break_index = state->index;
+
+		growing_array_add((void**)&state->line_break_indices, &state->start_index);
+
+		u64 count_from_start_to_space = break_index-state->start_index;
+		growing_array_add((void**)&state->glyph_count_per_line, &count_from_start_to_space);
+
+		u64 count_from_space_to_now = state->index - break_index;
+		state->count = count_from_space_to_now;
+		
+		if (break_index == state->index && (is_newline || g.codepoint == ' ')) {
+			break_index += 1; // Skip \n and space if that's what we break on
+		}
+		state->start_index = break_index;
+		state->line_num += 1;
+
+		if (do_break_at_last_space) state->line_start_x = state->last_space_x;
+		else state->line_start_x = x;
+	} else {
+		if (g.codepoint == ' ') {
+			state->last_space_index = state->index+1;
+		}
+	}
+	
+	state->index += 1;
+	state->count += 1;
+	
+	return true;
+};
+
+// Returns a Growing_Array of string, allocated with temp allocator
+string *split_text_to_lines_with_wrapping(string str, float32 width, Gfx_Font *font, u32 raster_height, Vector2 scale, bool do_trim_lines) {
+
+	Gfx_Font_Variation *variation = &font->variations[raster_height];
+
+	string text = str;
+	State_For_Glyph_Line_Break_Search result = ZERO(State_For_Glyph_Line_Break_Search);
+	result.width = width;
+	result.scale = scale;
+	growing_array_init((void**)&result.line_break_indices, sizeof(u64), get_temporary_allocator());
+	growing_array_init((void**)&result.glyph_count_per_line, sizeof(u64), get_temporary_allocator());
+	
+	walk_glyphs((Walk_Glyphs_Spec){font, text, raster_height, scale, false, &result}, text_line_wrapping_callback);
+
+	string *lines;
+	growing_array_init((void**)&lines, sizeof(string), get_temporary_allocator());
+
+	for (u64 i = 0; i < growing_array_get_valid_count(result.line_break_indices); i += 1) {
+		u64 utf8_index = result.line_break_indices[i];
+		u64 byte_index = utf8_index_to_byte_index(text, utf8_index);
+		u64 utf8_count = result.glyph_count_per_line[i];
+		u64 byte_count = utf8_index_to_byte_index(text, utf8_index + utf8_count) - byte_index;
+		string line_str = string_view(text, byte_index, byte_count);
+		if (do_trim_lines)  line_str = string_trim(line_str);
+		growing_array_add((void**)&lines, &line_str);
+	}
+	if (result.count > 0) {
+		u64 utf8_index = result.start_index;
+		u64 byte_index = utf8_index_to_byte_index(text, utf8_index);
+		u64 utf8_count = result.count;
+		u64 byte_count = utf8_index_to_byte_index(text, utf8_index + utf8_count) - byte_index;
+		string line_str = string_view(text, byte_index, byte_count);
+		if (do_trim_lines)  line_str = string_trim(line_str);
+		growing_array_add((void**)&lines, &line_str);
+	}
+
+	return lines;
+}

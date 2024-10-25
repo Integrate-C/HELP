@@ -12,7 +12,7 @@
 	
 	- All FILE * stdio procedures are replaced with the equivalent for the oogabooga
 	file API.
-	
+	- all draw_line -> stb_vorbis_draw_line
 
 */
 
@@ -70,8 +70,37 @@ int fseek(File f, s64 offset, s64 origin) {
 }
 
 File fopen(const char *filename, const char *mode) {
-    // Handling modes
-    File f = os_file_open_s(STR(filename), O_READ);
+    Os_Io_Open_Flags flags = 0;
+
+    while (*mode) {
+      switch (*mode) {
+         case 'r': 
+            if (*(mode + 1) == '+') {
+               flags = O_READ | O_WRITE;
+            } else {
+               flags = O_READ;
+            }
+            break;
+
+         case 'w': 
+            if (*(mode + 1) == '+') {
+               flags = O_READ | O_WRITE | O_CREATE;
+            } else {
+               flags = O_WRITE | O_CREATE;
+            }
+            break;
+
+         case 'b':
+            // Do nothing.
+            break;
+
+         default: 
+            assert(0, "Unknown/unsupported fopen mode: %c", *mode);
+      }
+      mode++;
+    }
+
+    File f = os_file_open_s(STR(filename), flags);
     return f;
 }
 
@@ -2125,7 +2154,7 @@ static float inverse_db_table[256] =
 int8 integer_divide_table[DIVTAB_NUMER][DIVTAB_DENOM]; // 2KB
 #endif
 
-static __forceinline void draw_line(float *output, int x0, int y0, int x1, int y1, int n)
+static __forceinline void stb_vorbis_draw_line(float *output, int x0, int y0, int x1, int y1, int n)
 {
    int dy = y1 - y0;
    int adx = x1 - x0;
@@ -3186,13 +3215,13 @@ static int do_floor(vorb *f, Mapping *map, int i, int n, float *target, YTYPE *f
             int hy = finalY[j] * g->floor1_multiplier;
             int hx = g->Xlist[j];
             if (lx != hx)
-               draw_line(target, lx,ly, hx,hy, n2);
+               stb_vorbis_draw_line(target, lx,ly, hx,hy, n2);
             CHECK(f);
             lx = hx, ly = hy;
          }
       }
       if (lx < n2) {
-         // optimization of: draw_line(target, lx,ly, n,ly, n2);
+         // optimization of: stb_vorbis_draw_line(target, lx,ly, n,ly, n2);
          for (j=lx; j < n2; ++j)
             LINE_OP(target[j], inverse_db_table[ly]);
          CHECK(f);
